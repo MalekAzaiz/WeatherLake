@@ -6,6 +6,7 @@ FETCH_DELAY = 5 #seconds
 CITIES = {
     # France
     "Paris":     {"lat": 48.8566, "lon": 2.3522},
+    "Grenoble":  {"lat": 45.1885, "lon": 5.7245},
     "Lyon":      {"lat": 45.7640, "lon": 4.8357},
     "Marseille": {"lat": 43.2965, "lon": 5.3698},
     "Bordeaux":  {"lat": 44.8378, "lon": -0.5792},
