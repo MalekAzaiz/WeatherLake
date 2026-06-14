@@ -1,5 +1,8 @@
 # config/settings.py
 
+MAX_FETCH_ATTEMPTS = 5
+FETCH_DELAY = 5 #seconds
+
 CITIES = {
     # France
     "Paris":     {"lat": 48.8566, "lon": 2.3522},
