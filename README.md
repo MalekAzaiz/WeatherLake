@@ -153,3 +153,14 @@ This will:
 - **Single `_latest` file per gold table** — simplifies Power BI refresh (one click, no file management)
 - **`weathercode` preserved** — enables icon-based visualization in Power BI alongside human-readable labels
 
+## Automation
+
+The pipeline runs automatically every hour via **GitHub Actions**.
+
+Each run:
+1. Fetches fresh weather data from Open-Meteo API
+2. Updates the silver layer with new hourly records
+3. Recomputes gold KPIs and overwrites `_latest` files
+4. Power BI reflects the update on next **Refresh**
+
+The workflow can also be triggered manually from the GitHub Actions tab.
