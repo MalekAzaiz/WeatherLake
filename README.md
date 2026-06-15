@@ -4,36 +4,59 @@ An end-to-end weather data pipeline built on **Azure Data Lake Storage Gen2**, p
 
 ---
 
+## Versions
+
+| Branch | Orchestration | Status |
+|---|---|---|
+| [`main`](../../tree/main) | GitHub Actions (cron every 4h) | ✅ Stable |
+| [`azure-functions`](../../tree/azure-functions) | Azure Data Factory + Azure Functions | ✅ Stable |
+
+---
+
 ## Architecture
 
 ```
 ┌─────────────────────┐
-│   Open-Meteo API    │  Free weather API — 14 cities, hourly data
+│   Open-Meteo API    │  Free weather API — 15 cities, hourly data
 │  (no API key)       │  temperature, humidity, wind, UV, visibility,
 └────────┬────────────┘  weather code, precipitation
          │
          ▼
-┌─────────────────────────────────────────────────────┐
-│              Azure Data Lake Storage Gen2           │
-│                                                     │
+┌────────────────────────────────────────────────────┐
+│              Azure Data Lake Storage Gen2          │
+│                                                    │
 │  ┌─────────┐    ┌──────────┐    ┌────────────────┐ │
-│  │   RAW   │───▶│  SILVER  │───▶│      GOLD      │ │
+│  │   RAW   │───▶│  SILVER  │───▶│      GOLD     │ │
 │  │         │    │          │    │                │ │
 │  │ JSON    │    │ Cleaned  │    │ current_       │ │
 │  │ per     │    │ hourly   │    │ snapshot       │ │
 │  │ city /  │    │ + daily  │    │ hourly_24h     │ │
 │  │ fetch   │    │ CSV      │    │ forecast_7days │ │
 │  └─────────┘    └──────────┘    └────────┬───────┘ │
-└─────────────────────────────────────────-│─────────┘
+└──────────────────────────────────────────│─────────┘
+                                           │
+                         ┌─────────────────┴──────────────────┐
+                         │                                    │
+                         ▼                                    ▼
+              ┌─────────────────────┐           ┌────────────────────────┐
+              │   GitHub Actions    │           │   Azure Data Factory   │
+              │   (main branch)     │           │  (azure-functions      │
+              │   cron every 4h     │           │   branch) every 4h     │
+              └─────────────────────┘           │                        │
+                                                │  fetch_and_upload →    │
+                                                │  raw_to_silver    →    │
+                                                │  silver_to_gold        │
+                                                │  (Azure Functions)     │
+                                                └────────────────────────┘
                                            │
                                            ▼
-                                ┌─────────────────────┐
+                                ┌──────────────────────┐
                                 │  Power BI Dashboard  │
                                 │                      │
                                 │ • Current conditions │
                                 │ • 24h trend          │
                                 │ • 7-day forecast     │
-                                └─────────────────────┘
+                                └──────────────────────┘
 ```
 
 ---
@@ -81,7 +104,8 @@ The pipeline follows a **medallion architecture** with three layers:
 | Data source | Open-Meteo API (free, no key required) |
 | Storage | Azure Data Lake Storage Gen2 |
 | Processing | Python (pandas, azure-storage-blob) |
-| Orchestration | `run_pipeline.py` — single entry point |
+| Orchestration (v1) | GitHub Actions (cron schedule) |
+| Orchestration (v2) | Azure Data Factory + Azure Functions |
 | Visualization | Power BI Desktop (direct ADLS Gen2 connection) |
 
 ---
@@ -98,7 +122,15 @@ WeatherLake/
 ├── processing/
 │   ├── raw_to_silver.py        # raw → silver (clean & structure)
 │   └── silver_to_gold.py       # silver → gold (KPIs & aggregations)
-├── run_pipeline.py             # Full pipeline entry point
+├── azure_functions/             # azure-functions branch only
+│   ├── function_app.py         # 3 HTTP Azure Functions
+│   ├── ingestion/
+│   ├── processing/
+│   ├── config/
+│   └── requirements.txt
+├── .github/workflows/
+│   └── pipeline.yml            # main branch only
+├── run_pipeline.py             # Local pipeline entry point
 ├── .env                        # Azure credentials (not committed)
 ├── requirements.txt
 └── README.md
@@ -124,15 +156,26 @@ Create a `.env` file:
 AZURE_CONNECTION_STRING=your_connection_string_here
 ```
 
-**3. Run the pipeline**
+**3. Run locally**
 ```bash
 python run_pipeline.py
 ```
 
-This will:
-1. Fetch weather data for all cities → upload to `raw/`
-2. Clean and structure data → write to `silver/`
-3. Compute KPIs → write 3 CSV files to `gold/`
+---
+
+## Automation
+
+### v1 — GitHub Actions (`main` branch)
+The pipeline runs automatically every 4 hours via GitHub Actions.
+Each run executes `run_pipeline.py` which chains the 3 steps in sequence.
+The workflow can also be triggered manually from the GitHub Actions tab.
+
+### v2 — Azure Data Factory (`azure-functions` branch)
+The pipeline runs automatically every 4 hours via an ADF schedule trigger.
+Each step is an independent **Azure Function** (HTTP trigger) called in sequence by ADF:
+1. `fetch_and_upload` — calls Open-Meteo API → uploads JSON to `raw/`
+2. `raw_to_silver` — cleans and structures data → writes to `silver/`
+3. `silver_to_gold` — computes KPIs → overwrites 3 `_latest` CSV files in `gold/`
 
 ---
 
@@ -140,7 +183,7 @@ This will:
 
 | Region | Cities |
 |---|---|
-| France | Paris, Lyon, Marseille, Bordeaux, Lille, Nice |
+| France | Paris, Lyon, Marseille, Bordeaux, Lille, Nice, Grenoble |
 | Europe | London, Madrid, Berlin, Rome |
 | World | New York, Tokyo, Dubai, Sydney |
 
@@ -151,16 +194,6 @@ This will:
 - **KPIs defined before development** — dashboard requirements drove the pipeline design, not the other way around
 - **Medallion architecture** — raw data is never modified, enabling full reprocessing at any time
 - **Single `_latest` file per gold table** — simplifies Power BI refresh (one click, no file management)
+- **Azure Functions over Databricks** — lightweight HTTP triggers are sufficient for this workload; Databricks would add unnecessary cost and cold-start latency
+- **Two orchestration versions** — GitHub Actions (v1) for simplicity, ADF (v2) for native Azure integration and monitoring
 - **`weathercode` preserved** — enables icon-based visualization in Power BI alongside human-readable labels
-
-## Automation
-
-The pipeline runs automatically every hour via **GitHub Actions**.
-
-Each run:
-1. Fetches fresh weather data from Open-Meteo API
-2. Updates the silver layer with new hourly records
-3. Recomputes gold KPIs and overwrites `_latest` files
-4. Power BI reflects the update on next **Refresh**
-
-The workflow can also be triggered manually from the GitHub Actions tab.
